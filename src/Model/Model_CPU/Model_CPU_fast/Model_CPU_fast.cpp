@@ -26,30 +26,31 @@ void Model_CPU_fast
 	const b_type b10 = b_type(10.0f);
 	const b_type b1 = b_type(1.0f);
 
-	#pragma omp parallel for schedule(static)
-	for (int i = 0; i < n_particles; i++)
+	#pragma omp parallel for
+	for (int i = 0; i < n_particles; i += b_type::size)
 	{
+		b_type xi = b_type::load_unaligned(&particles.x[i]);
+		b_type yi = b_type::load_unaligned(&particles.y[i]);
+		b_type zi = b_type::load_unaligned(&particles.z[i]);
+
 		b_type acc_x = b_type(0.0f);
 		b_type acc_y = b_type(0.0f);
 		b_type acc_z = b_type(0.0f);
-
-		b_type xi = b_type(particles.x[i]);
-		b_type yi = b_type(particles.y[i]);
-		b_type zi = b_type(particles.z[i]);
 		for (int j = 0; j < n_particles; j += b_type::size)
 		{
-			if (i != j) {
-				b_type xj = b_type::load_unaligned(&particles.x[j]);
-				b_type yj = b_type::load_unaligned(&particles.y[j]);
-				b_type zj = b_type::load_unaligned(&particles.z[j]);
-				b_type mj = b_type::load_unaligned(&initstate.masses[j]);
+			b_type xj = b_type::load_unaligned(&particles.x[j]);
+			b_type yj = b_type::load_unaligned(&particles.y[j]);
+			b_type zj = b_type::load_unaligned(&particles.z[j]);
+			b_type mj = b_type::load_unaligned(&initstate.masses[j]);
 
-
+			for (int k = 0; k < b_type::size; k++) {
 				b_type diffx = xj - xi;
 				b_type diffy = yj - yi;
 				b_type diffz = zj - zi;
 
-				b_type dij = diffx * diffx + diffy * diffy + diffz * diffz;
+				b_type diffy2 = diffy * diffy;
+				b_type dij = xs::fma(diffx, diffx, diffy2);
+				dij = xs::fma(diffz, diffz, dij);
 				dij = xs::max(dij, b1);
 
 				// Compute inverse squared-root and handle singularities
@@ -62,15 +63,19 @@ void Model_CPU_fast
 				acc_x += diffx * dij * mj;
 				acc_y += diffy * dij * mj;
 				acc_z += diffz * dij * mj;
+
+				xj = xs::rotate_right<1>(xj);
+				yj = xs::rotate_right<1>(yj);
+				zj = xs::rotate_right<1>(zj);
+				mj = xs::rotate_right<1>(mj);
 			}
 		}
-		// Store results back
-		accelerationsx[i] += xs::reduce_add(acc_x);
-		accelerationsy[i] += xs::reduce_add(acc_y);
-		accelerationsz[i] += xs::reduce_add(acc_z);
+		acc_x.store_unaligned(&accelerationsx[i]);
+		acc_y.store_unaligned(&accelerationsy[i]);
+		acc_z.store_unaligned(&accelerationsz[i]);
 	}
 
-	#pragma omp parallel for schedule(static)
+	#pragma omp parallel for
 	for (int i = 0; i < n_particles; i += b_type::size)
 	{
 		b_type axi = b_type::load_unaligned(&accelerationsx[i]);
